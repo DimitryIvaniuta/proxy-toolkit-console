@@ -1,101 +1,123 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+
+// mock API call used by the hook
+vi.mock("../../lib/api", async (importOriginal) => {
+    const mod = await importOriginal<any>();
+    return {
+        ...mod,
+        demoIdempotent: vi.fn(),
+    };
+});
+
+import { demoIdempotent } from "../../lib/api";
 import IdempotentPage from "../../app/demo/idempotent/page";
 
-const mutate = vi.fn();
-const reset = vi.fn();
+const demoIdempotentMock = demoIdempotent as unknown as ReturnType<typeof vi.fn>;
 
-// Mock the hook used by the page so we can assert inputs -> mutation call
-vi.mock("../../../lib/hooks", () => ({
-    useDemoIdempotent: () => ({
-        mutate,
-        reset,
-        isPending: false,
-        error: null,
-        data: null,
-    }),
-}));
+function renderWithQueryClient() {
+    const qc = new QueryClient({
+        defaultOptions: {
+            queries: { retry: false },
+            mutations: { retry: false },
+        },
+    });
 
-// Mock idempotency key generator for deterministic test
-vi.mock("../../../lib/idempotency", () => ({
-    newIdempotencyKey: () => "idem-new-001",
-}));
-
-async function renderPage() {
-    const { default: IdempotentPage } = await import("../../app/demo/idempotent/page");
-    return render(<IdempotentPage />);
+    return render(
+        <QueryClientProvider client={qc}>
+            <IdempotentPage />
+        </QueryClientProvider>
+    );
 }
 
 describe("Idempotent demo page", () => {
     beforeEach(() => {
-        mutate.mockClear();
-        reset.mockClear();
+        demoIdempotentMock.mockReset();
+
+
+        const randomUUID = vi.fn()
+            .mockReturnValueOnce("uuid-1") // initial render
+            .mockReturnValueOnce("uuid-2"); // after clicking "New key"
+
+        vi.stubGlobal("crypto", { randomUUID } as any);
+
+        // needed for "New key" button (newIdempotencyKey uses crypto.randomUUID)
+        // vi.stubGlobal("crypto", { randomUUID: () => "uuid-1" } as any);
     });
 
-    it("renders form fields and sends mutation with body + idempotency key", async () => {
-        // render(<IdempotentPage />);
-        await renderPage();
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
 
-        const amount = screen.getByPlaceholderText("Amount") as HTMLInputElement;
-        const currency = screen.getByPlaceholderText("Currency") as HTMLInputElement;
-        const key = screen.getByPlaceholderText("X-Idempotency-Key") as HTMLInputElement;
-
-        // defaults from the page
-        expect(amount.value).toBe("100");
-        expect(currency.value).toBe("PLN");
-        expect(key.value).toBe("12345");
-
-        fireEvent.change(amount, { target: { value: "250" } });
-        fireEvent.change(currency, { target: { value: "EUR" } });
-        fireEvent.change(key, { target: { value: "k-123" } });
-
-        const sendBtn = screen.getByRole("button", { name: "Send" });
-        expect(sendBtn).not.toBeDisabled();
-
-        fireEvent.click(sendBtn);
-
-        expect(mutate).toHaveBeenCalledTimes(1);
-        expect(mutate).toHaveBeenCalledWith({
-            body: { amount: 250, currency: "EUR" },
-            idempotencyKey: "k-123",
+    it("sends request using demoIdempotent(body, key) and shows response", async () => {
+        demoIdempotentMock.mockResolvedValue({
+            paymentId: "p-1",
+            amount: 250,
+            currency: "EUR",
         });
+
+        renderWithQueryClient();
+
+        fireEvent.change(screen.getByPlaceholderText("Amount"), { target: { value: "250" } });
+        fireEvent.change(screen.getByPlaceholderText("Currency"), { target: { value: "EUR" } });
+        fireEvent.change(screen.getByPlaceholderText("X-Idempotency-Key"), { target: { value: "k-123" } });
+
+        fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+        await waitFor(() => {
+            expect(demoIdempotentMock).toHaveBeenCalledWith(
+                { amount: 250, currency: "EUR" },
+                "k-123"
+            );
+        });
+
+        // response rendered
+        expect(await screen.findByText(/"paymentId":\s*"p-1"/)).toBeInTheDocument();
     });
 
-    it("generates a new idempotency key when clicking 'New key'", async () => {
-        // render(<IdempotentPage />);
-        await renderPage();
+    it("generates a new idempotency key when clicking 'New key'", () => {
+        renderWithQueryClient();
 
         const key = screen.getByPlaceholderText("X-Idempotency-Key") as HTMLInputElement;
-        expect(key.value).toBe("12345");
+        console.log('ii key', key);
+        expect(key.value).toBe("idem-uuid-1");
 
         fireEvent.click(screen.getByRole("button", { name: "New key" }));
-        expect(key.value).toBe("idem-new-001");
+
+        // newIdempotencyKey() => "idem-" + crypto.randomUUID()
+        expect(key.value).toBe("idem-uuid-2");
     });
 
-    it("disables Send when idempotency key is blank", async () => {
-        // render(<IdempotentPage />);
-        await renderPage();
+    it("disables Send when idempotency key is blank", () => {
+        renderWithQueryClient();
 
-        const key = screen.getByPlaceholderText("X-Idempotency-Key") as HTMLInputElement;
-        fireEvent.change(key, { target: { value: "   " } });
-
+        fireEvent.change(screen.getByPlaceholderText("X-Idempotency-Key"), { target: { value: "   " } });
         expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     });
 
-    it("disables Send when amount is not a number", async () => {
-        // render(<IdempotentPage />);
-        await renderPage();
+    it("disables Send when amount is not a number", () => {
+        renderWithQueryClient();
 
-        const amount = screen.getByPlaceholderText("Amount") as HTMLInputElement;
-        fireEvent.change(amount, { target: { value: "abc" } });
-
+        fireEvent.change(screen.getByPlaceholderText("Amount"), { target: { value: "abc" } });
         expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     });
 
-    it("Reset button calls mutation reset()", async () => {
-        // render(<IdempotentPage />);
-        await renderPage();
+    it("Reset clears displayed response", async () => {
+        demoIdempotentMock.mockResolvedValue({
+            paymentId: "p-2",
+            amount: 100,
+            currency: "PLN",
+        });
+
+        renderWithQueryClient();
+
+        fireEvent.click(screen.getByRole("button", { name: "Send" }));
+        expect(await screen.findByText(/"paymentId":\s*"p-2"/)).toBeInTheDocument();
 
         fireEvent.click(screen.getByRole("button", { name: "Reset" }));
-        expect(reset).toHaveBeenCalledTimes(1);
+
+        await waitFor(() => {
+            expect(screen.queryByText(/"paymentId":/)).not.toBeInTheDocument();
+        });
     });
 });
