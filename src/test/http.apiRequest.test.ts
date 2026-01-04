@@ -20,11 +20,13 @@ describe("apiRequest", () => {
     });
     window.localStorage.setItem("proxyToolkit.apiKey", "abc");
     // crypto.randomUUID stub
-    (globalThis as any).crypto = { randomUUID: () => "uuid-1" };
+    // (globalThis as any).crypto = { randomUUID: () => "uuid-1" };
+    vi.stubGlobal("crypto", { randomUUID: () => "uuid-1" } as any);
   });
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    vi.unstubAllGlobals();
   });
 
   it("adds X-Api-Key, X-Correlation-Id and optional X-Idempotency-Key", async () => {

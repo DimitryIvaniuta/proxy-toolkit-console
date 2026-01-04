@@ -1,12 +1,12 @@
 import { render, screen } from "@testing-library/react";
-import { Sidebar } from "../../components/layout/Sidebar";
 
 vi.mock("next/navigation", () => ({
   usePathname: () => "/demo/cache",
 }));
 
 describe("Sidebar", () => {
-  it("renders navigation items", () => {
+  it("renders navigation items", async () => {
+    const { Sidebar } = await import("../../components/layout/Sidebar");
     render(<Sidebar />);
     expect(screen.getByText("Dashboard")).toBeInTheDocument();
     expect(screen.getByText("Cache")).toBeInTheDocument();
