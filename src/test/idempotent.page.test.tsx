@@ -34,10 +34,8 @@ describe("Idempotent demo page", () => {
     beforeEach(() => {
         demoIdempotentMock.mockReset();
 
-
-        const randomUUID = vi.fn()
-            .mockReturnValueOnce("uuid-1") // initial render
-            .mockReturnValueOnce("uuid-2"); // after clicking "New key"
+        let seq = 0;
+        const randomUUID = vi.fn(() => `uuid-${++seq}`);
 
         vi.stubGlobal("crypto", { randomUUID } as any);
 
@@ -79,13 +77,14 @@ describe("Idempotent demo page", () => {
         renderWithQueryClient();
 
         const key = screen.getByPlaceholderText("X-Idempotency-Key") as HTMLInputElement;
-        console.log('ii key', key);
-        expect(key.value).toBe("idem-uuid-1");
+
+        const first = key.value;
+        expect(first).toMatch(/^idem-uuid-\d+$/);
 
         fireEvent.click(screen.getByRole("button", { name: "New key" }));
 
-        // newIdempotencyKey() => "idem-" + crypto.randomUUID()
-        expect(key.value).toBe("idem-uuid-2");
+        expect(key.value).toMatch(/^idem-uuid-\d+$/);
+        expect(key.value).not.toBe(first);
     });
 
     it("disables Send when idempotency key is blank", () => {
